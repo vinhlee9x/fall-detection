@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="description" content="Giám sát phát hiện té ngã trên Raspberry Pi: video khung xương, số đo thiết bị, ảnh báo động, cấu hình Telegram">
+<title>Giám sát té ngã</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Bỏ qua tới nội dung</a>
+<header class="topbar">
+  <h1 class="brand"><span class="brand-mark" aria-hidden="true"></span>Giám sát té ngã</h1>
+  <div class="topbar-right">
+    <span id="state-chip" class="chip chip-normal" role="status">Bình thường</span>
+    <span class="conn" role="status"><span id="conn-dot" class="dot dot-wait"></span><span id="conn-text">Đang kết nối</span></span>
+  </div>
+</header>
+
+<div id="alarm-banner" class="banner" role="alert" aria-live="assertive" hidden>
+  <strong>BÁO ĐỘNG TÉ NGÃ</strong>
+  <span id="alarm-banner-text"></span>
+  <button id="alarm-banner-close" class="btn btn-ghost" type="button">Đóng</button>
+</div>
+
+<nav class="tabs" role="tablist" aria-label="Chức năng">
+  <button id="tab-monitor" class="tab" role="tab" aria-selected="true" aria-controls="panel-monitor" type="button">Giám sát</button>
+  <button id="tab-alarms" class="tab" role="tab" aria-selected="false" aria-controls="panel-alarms" tabindex="-1" type="button">Ảnh báo động</button>
+  <button id="tab-telegram" class="tab" role="tab" aria-selected="false" aria-controls="panel-telegram" tabindex="-1" type="button">Telegram</button>
+</nav>
+
+<main id="main">
+  <section id="panel-monitor" class="panel layout" role="tabpanel" aria-labelledby="tab-monitor">
+    <div class="col">
+      <div class="card video-card">
+        <img id="stream" class="video" alt="Video trực tiếp có khung xương">
+        <p id="stream-msg" class="video-msg" hidden></p>
+      </div>
+      <div class="card">
+        <h2 class="card-title">Xác suất ngã (60 giây)</h2>
+        <canvas id="chart" class="chart" role="img" aria-label="Biểu đồ xác suất ngã theo thời gian"></canvas>
+        <div class="legend">
+          <span><i class="sw sw-normal"></i>Bình thường</span>
+          <span><i class="sw sw-suspect"></i>Nghi ngờ</span>
+          <span><i class="sw sw-thr"></i>Ngưỡng <b id="thr-val">N/A</b></span>
+        </div>
+        <dl class="stats">
+          <div><dt>p_fall</dt><dd id="m-pfall">N/A</dd></div>
+          <div><dt>FPS</dt><dd id="m-fps">N/A</dd></div>
+          <div><dt>MoveNet</dt><dd id="m-ms">N/A</dd></div>
+          <div><dt>Nguồn</dt><dd id="m-source">N/A</dd></div>
+        </dl>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card">
+        <h2 class="card-title">Thiết bị</h2>
+        <div id="device"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="panel-alarms" class="panel" role="tabpanel" aria-labelledby="tab-alarms" hidden>
+    <p id="alarms-empty" class="empty">Chưa có báo động nào.</p>
+    <ul id="alarms-grid" class="grid"></ul>
+  </section>
+
+  <section id="panel-telegram" class="panel" role="tabpanel" aria-labelledby="tab-telegram" hidden>
+    <form id="tg-form" class="card form" autocomplete="off">
+      <h2 class="card-title">Thông báo Telegram</h2>
+      <p class="note">Ảnh báo động (có hình người) sẽ được gửi tới máy chủ Telegram. Chỉ bật nếu bạn chấp nhận điều này.</p>
+      <label class="switch"><input id="tg-enabled" type="checkbox"><span>Bật gửi thông báo</span></label>
+      <label class="field"><span>Token bot</span><input id="tg-token" type="password" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>chat_id</span><input id="tg-chat" type="text" inputmode="text" spellcheck="false" placeholder="123456789 hoặc @tenkenh"></label>
+      <label class="field"><span>Mẫu tin nhắn</span><textarea id="tg-template" rows="5"></textarea></label>
+      <p class="hint">Dùng được: <code>{time}</code> <code>{p_fall}</code> <code>{device}</code></p>
+      <div class="actions">
+        <button id="tg-save" class="btn btn-primary" type="submit">Lưu</button>
+        <button id="tg-test" class="btn" type="button">Gửi thử</button>
+      </div>
+      <p id="tg-result" class="result" role="status"></p>
+      <details class="help">
+        <summary>Cách lấy token và chat_id</summary>
+        <ol>
+          <li>Mở Telegram, nhắn <code>@BotFather</code>, gõ <code>/newbot</code> và làm theo để nhận token.</li>
+          <li>Nhắn một tin bất kỳ cho bot vừa tạo (hoặc thêm bot vào nhóm).</li>
+          <li>Mở <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> trên máy có internet, tìm <code>"chat":{"id":...}</code>.</li>
+        </ol>
+      </details>
+    </form>
+  </section>
+</main>
+
+<dialog id="viewer" class="viewer" aria-label="Ảnh báo động">
+  <div class="viewer-bar">
+    <div class="seg" role="group" aria-label="Loại ảnh">
+      <button id="viewer-annotated" class="btn seg-btn" type="button" aria-pressed="true">Khung xương</button>
+      <button id="viewer-raw" class="btn seg-btn" type="button" aria-pressed="false">Ảnh gốc</button>
+    </div>
+    <span id="viewer-caption" class="viewer-caption"></span>
+    <button id="viewer-close" class="btn" type="button">Đóng (Esc)</button>
+  </div>
+  <img id="viewer-img" class="viewer-img" alt="Ảnh báo động phóng to">
+</dialog>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

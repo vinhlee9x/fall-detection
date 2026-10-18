@@ -10,7 +10,10 @@ WANT_SERVICE=0
 [[ "${1:-}" == "--service" ]] && WANT_SERVICE=1
 
 echo "== 1/5 Kiểm tra file và hệ điều hành"
-for f in fall_core.py pi_demo.py test_video.py fall_config.json rf_fall.onnx movenet_lightning_int8.tflite; do
+for f in fall_core.py pi_demo.py test_video.py fall_config.json rf_fall.onnx movenet_lightning_int8.tflite \
+         overlay.py frame_sources.py pipeline.py event_bus.py system_metrics.py alarm_store.py \
+         dashboard_config.py telegram_notifier.py web_app.py fall_dashboard.py \
+         web/index.html web/style.css web/app.js; do
   [[ -f "$f" ]] || { echo "THIẾU FILE: $f (giải nén đủ fall_pi_deploy.zip vào $APP_DIR)"; exit 1; }
 done
 if [[ "$(uname -m)" != "aarch64" ]]; then
@@ -39,11 +42,11 @@ else
   OPENCV_SPEC="opencv-python-headless"
 fi
 echo "numpy hệ thống: $SYS_NP -> $OPENCV_SPEC"
-pip install -q "numpy==$SYS_NP" ai-edge-litert onnxruntime "$OPENCV_SPEC"
+pip install -q "numpy==$SYS_NP" ai-edge-litert onnxruntime "$OPENCV_SPEC" flask psutil
 
 echo "== 5/5 Kiểm tra"
 python - <<'EOF'
-import json, time, numpy as np, cv2, onnxruntime
+import json, time, numpy as np, cv2, onnxruntime, flask, psutil
 import fall_core
 from fall_core import MoveNet, onnx_predictor, N_FEATURES
 cfg = json.load(open("fall_config.json"))
@@ -76,7 +79,9 @@ After=network-online.target
 [Service]
 User=$(id -un)
 WorkingDirectory=$APP_DIR
-ExecStart=$APP_DIR/venv/bin/python -u pi_demo.py --save-alarm
+ExecStart=$APP_DIR/venv/bin/python -u fall_dashboard.py
+UMask=0077
+SupplementaryGroups=video
 Restart=on-failure
 RestartSec=5
 
@@ -87,6 +92,7 @@ EOF
   sudo systemctl enable fall-detector
   sudo systemctl restart fall-detector
   echo "Xem log: journalctl -u fall-detector -f | Dừng: sudo systemctl stop fall-detector"
+  echo "Dashboard: http://$(hostname).local:8080  hoặc  http://$(hostname -I | awk '{print $1}'):8080"
 fi
 
 echo
@@ -94,3 +100,4 @@ echo "XONG. Chạy thử:"
 echo "  cd $APP_DIR && source venv/bin/activate"
 echo "  python test_video.py test.mp4      # video -> test_result.mp4"
 echo "  python pi_demo.py --log run.csv    # camera, Ctrl+C để dừng"
+echo "  python fall_dashboard.py           # dashboard web http://<ip-pi>:8080"
