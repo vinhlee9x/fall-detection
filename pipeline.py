@@ -7,6 +7,7 @@ import cv2
 from overlay import draw_overlay
 
 ALARM_BANNER_S = 2.0
+STREAM_MAX_SIDE = 640
 
 
 class AlarmEvent:
@@ -109,6 +110,15 @@ class DetectionPipeline:
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
         return buf.tobytes() if ok else None
 
+    def _encode_stream(self, frame, kps, t, prob, state):
+        scale = STREAM_MAX_SIDE / max(frame.shape[:2])
+        if scale < 1:
+            frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            kps = kps.copy()
+            kps[:, :2] *= scale
+        draw_overlay(frame, kps, t, prob, state, self.thr, t <= self._alarm_until)
+        return self._encode(frame)
+
     def _reset_detectors(self):
         self.det.reset()
         self.pose.reset()
@@ -147,8 +157,7 @@ class DetectionPipeline:
                 self._recent.append((now, ms))
                 jpeg = None
                 if self.viewers > 0:
-                    draw_overlay(frame, kps, t, prob, state, self.thr, t <= self._alarm_until)
-                    jpeg = self._encode(frame)
+                    jpeg = self._encode_stream(frame, kps, t, prob, state)
                 self.state.update(jpeg=jpeg, t=t, p_fall=prob, state=state, pose_ms=self._avg_ms(),
                                   fps=self._fps(), alarm_count=self.alarm_count)
                 if now - win_start >= self.report_every:

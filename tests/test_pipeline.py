@@ -114,3 +114,17 @@ def test_threaded_start_stop():
     assert not pipe.alive()
     assert pipe.error is None
     assert pipe.total_frames == 10
+
+
+def test_stream_jpeg_downscaled_for_large_frames():
+    import cv2
+
+    def big_source():
+        for i in range(5):
+            yield i * 0.1, np.zeros((1232, 1640, 3), dtype=np.uint8)
+
+    pipe = DetectionPipeline(FakePose(), FakeDetector(999), big_source(), 0.5, quiet=True)
+    pipe.add_viewer()
+    pipe.run()
+    img = cv2.imdecode(np.frombuffer(pipe.state.jpeg, np.uint8), cv2.IMREAD_COLOR)
+    assert max(img.shape[:2]) == 640

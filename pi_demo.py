@@ -24,7 +24,7 @@ def main():
     ap.add_argument("video", nargs="?", help="file video; bỏ trống để dùng camera")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--cam", type=int, default=0, help="chỉ số USB webcam khi không có Pi Camera")
-    ap.add_argument("--size", default="640x480", help="độ phân giải camera")
+    ap.add_argument("--size", default="3280x2464", help="độ phân giải camera")
     ap.add_argument("--log", help="ghi CSV: t, p_fall, state, pose_ms")
     ap.add_argument("--save-alarm", action="store_true", help="lưu ảnh lúc báo động")
     args = ap.parse_args()
