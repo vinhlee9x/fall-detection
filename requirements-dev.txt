@@ -1,0 +1,7 @@
+numpy<2
+opencv-python-headless
+onnxruntime
+ai-edge-litert
+flask
+psutil
+pytest

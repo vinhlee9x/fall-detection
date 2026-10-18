@@ -1,0 +1,151 @@
+"""Chạy thử bộ phát hiện té ngã trên 1 video và xuất video có vẽ khung xương + p_fall + trạng thái.
+
+Dùng được trên Colab, PC hoặc Pi (đặt cùng thư mục với các file trong fall_pi_bundle.zip):
+    python test_video.py video.mp4                      # -> video_result.mp4 + video_result.csv
+    python test_video.py video.mp4 --threshold 0.4      # thử ngưỡng khác
+    python test_video.py video.mp4 --confirm 2.0        # thời gian xác nhận nằm (giây)
+    python test_video.py video.mp4 --rotate 90          # video quay dọc bị xoay
+"""
+import argparse
+import functools
+import json
+import os
+import shutil
+import subprocess
+import time
+
+import cv2
+import numpy as np
+print = functools.partial(print, flush=True)  # in ngay, không mất chữ nếu tiến trình bị crash
+from fall_core import MoveNet, FallDetector, onnx_predictor, VIS_SCORE
+
+ap = argparse.ArgumentParser()
+ap.add_argument("video")
+ap.add_argument("--out", help="file video kết quả (mặc định <tên>_result.mp4)")
+ap.add_argument("--threshold", type=float, help="ghi đè ngưỡng trong fall_config.json")
+ap.add_argument("--confirm", type=float, help="ghi đè confirm_s trong fall_config.json")
+ap.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=0)
+ap.add_argument("--threads", type=int, default=4)
+ap.add_argument("--no-transcode", action="store_true", help="đọc video gốc, không chuẩn hoá bằng ffmpeg")
+args = ap.parse_args()
+
+cfg = json.load(open("fall_config.json"))
+thr = args.threshold if args.threshold is not None else cfg["threshold"]
+confirm = args.confirm if args.confirm is not None else cfg["confirm_s"]
+fps = cfg["target_fps"]
+pose = MoveNet(cfg["movenet"], num_threads=args.threads)
+det = FallDetector(onnx_predictor(cfg["model"]), threshold=thr, win_s=cfg["win_s"],
+                   stride_s=cfg["stride_s"], k=cfg["k"], n=cfg["n"], confirm_s=confirm)
+
+EDGES = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12),
+         (11, 13), (13, 15), (12, 14), (14, 16), (0, 5), (0, 6)]
+ROT = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+
+
+def draw(frame, kps, t, prob, state, alarm_until):
+    h, w = frame.shape[:2]
+    s = max(1.0, h / 480)
+    for i, j in EDGES:
+        if kps[i, 2] > VIS_SCORE and kps[j, 2] > VIS_SCORE:
+            cv2.line(frame, (int(kps[i, 1]), int(kps[i, 0])), (int(kps[j, 1]), int(kps[j, 0])),
+                     (0, 255, 0), int(2 * s))
+    for y, x, c in kps:
+        if c > VIS_SCORE:
+            cv2.circle(frame, (int(x), int(y)), int(3 * s), (0, 200, 255), -1)
+    # thanh xác suất + vạch ngưỡng
+    bx, by, bw, bh = int(10 * s), int(10 * s), int(200 * s), int(18 * s)
+    cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), (60, 60, 60), -1)
+    cv2.rectangle(frame, (bx, by), (bx + int(bw * prob), by + bh),
+                  (0, 0, 255) if prob >= thr else (0, 180, 0), -1)
+    cv2.line(frame, (bx + int(bw * thr), by - 3), (bx + int(bw * thr), by + bh + 3), (255, 255, 255), 2)
+    cv2.putText(frame, f"p_fall={prob:.2f}  {state}  t={t:.1f}s", (bx, by + bh + int(22 * s)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6 * s, (255, 255, 255), max(1, int(2 * s)))
+    if t <= alarm_until:
+        cv2.rectangle(frame, (0, h - int(50 * s)), (w, h), (0, 0, 255), -1)
+        cv2.putText(frame, "FALL DETECTED", (int(10 * s), h - int(15 * s)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.1 * s, (255, 255, 255), max(2, int(3 * s)))
+    return frame
+
+
+base = os.path.splitext(args.out or args.video)[0]
+
+
+def normalize(path):
+    """Chuẩn hoá video bằng ffmpeg: H.264, 30 fps cố định, tự xoay theo metadata, chiều cao <= 720.
+    Video điện thoại (H.265, fps thay đổi, có metadata xoay) dễ làm OpenCV đọc sai hoặc crash."""
+    if args.no_transcode or not shutil.which("ffmpeg"):
+        return path
+    norm = f"{base}_norm.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", path, "-an",
+                    "-vf", "fps=30,scale=-2:'min(720,ih)'", "-c:v", "libx264", "-preset", "veryfast",
+                    "-crf", "20", "-pix_fmt", "yuv420p", norm], check=True)
+    return norm
+
+
+src_path = normalize(args.video)
+cap = cv2.VideoCapture(src_path)
+if not cap.isOpened():
+    raise SystemExit(f"Không mở được video: {src_path}")
+vid_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+print(f"Đọc video {src_path} ({vid_fps:.1f} fps)")
+idx = -1
+out_path = args.out or f"{base}_result.mp4"
+tmp_path = f"{base}_tmp.mp4"
+writer, rows, events, alarms = None, [], [], []
+next_t, alarm_until, prev_state, ms_sum = 0.0, -1.0, "normal", 0.0
+
+while True:
+    ok, frame = cap.read()
+    if not ok:
+        break
+    idx += 1
+    t = idx / vid_fps   # thời gian theo số thứ tự frame (không dùng POS_MSEC)
+    if t + 1e-6 < next_t:
+        continue
+    next_t += 1.0 / fps
+    if args.rotate:
+        frame = cv2.rotate(frame, ROT[args.rotate])
+
+    t1 = time.perf_counter()
+    kps = pose(frame)
+    ms_sum += (time.perf_counter() - t1) * 1000
+    if det.push(t, kps, frame.shape[0]) == "alarm":
+        alarms.append(t)
+        alarm_until = t + 2.0
+    if det.state == "suspect" and prev_state != "suspect":
+        events.append(t)
+    prev_state = det.state
+    rows.append((t, det.last_prob, det.state))
+
+    if writer is None:
+        h, w = frame.shape[:2]
+        writer = cv2.VideoWriter(tmp_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    writer.write(draw(frame, kps, t, det.last_prob, det.state, alarm_until))
+
+print(f"Đã xử lý {len(rows)} frame, đang ghi video...")
+cap.release()
+if writer is None:
+    raise SystemExit("Video không có frame nào")
+writer.release()
+
+# chuyển sang H.264 để xem được trong trình duyệt/Colab (nếu máy có ffmpeg)
+if shutil.which("ffmpeg"):
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp_path, "-vcodec", "libx264",
+                    "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                    "-movflags", "+faststart", out_path], check=True)
+    os.remove(tmp_path)
+else:
+    os.replace(tmp_path, out_path)
+if src_path != args.video:
+    os.remove(src_path)
+
+with open(f"{base}_result.csv", "w") as f:
+    f.write("t,p_fall,state\n")
+    f.writelines(f"{t:.3f},{p:.3f},{s}\n" for t, p, s in rows)
+
+print(f"Video: {args.video} | {len(rows)} frame @ {fps} fps | MoveNet {ms_sum / len(rows):.0f} ms/frame")
+print(f"Ngưỡng={thr}  confirm={confirm}s  | p_fall cao nhất={max(r[1] for r in rows):.2f}")
+print("Nghi ngờ ngã (RF + k/n) tại:", [round(x, 1) for x in events] or "không có")
+print("BÁO ĐỘNG tại:", [round(x, 1) for x in alarms] or "không có")
+print("Kết quả:", out_path)
+os._exit(0)  # thoát ngay, tránh crash khi giải phóng interpreter TFLite
