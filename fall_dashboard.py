@@ -81,7 +81,7 @@ def build_parser():
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--cam", type=int, default=0)
-    ap.add_argument("--size", default="3280x2464")
+    ap.add_argument("--size", default="640x480")
     ap.add_argument("--config", default="dashboard_config.json")
     ap.add_argument("--alarm-dir", default="alarms")
     return ap
