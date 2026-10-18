@@ -24,6 +24,8 @@ MoveNet SinglePose Lightning int8 trích 17 keypoint. Cửa sổ 2s được g�
 Cần Raspberry Pi OS **64-bit** (Lite cũng được).
 
 ```bash
+ssh pi@raspberrypi.local
+hostname -I
 mkdir -p ~/fall && cd ~/fall
 unzip -o ~/fall_pi_deploy.zip
 bash install_pi.sh

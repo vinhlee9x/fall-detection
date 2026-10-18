@@ -30,12 +30,30 @@ def frames_from_video(path, period, loop=False, realtime=False):
         yield None, None
 
 
+def full_fov_sensor_mode(cam, w, h):
+    try:
+        full = tuple(cam.camera_properties["PixelArraySize"])
+        modes = [m for m in cam.sensor_modes if tuple(m["crop_limits"][2:]) == full]
+    except Exception:
+        return None
+    if not modes:
+        return None
+    enough = [m for m in modes if m["size"][0] >= w and m["size"][1] >= h]
+    pick = min(enough, key=lambda m: m["size"][0] * m["size"][1]) if enough else \
+        max(modes, key=lambda m: m["size"][0] * m["size"][1])
+    return {"output_size": tuple(pick["size"]), "bit_depth": pick["bit_depth"]}
+
+
 def frames_from_camera(size, cam_index, period):
     w, h = map(int, size.split("x"))
     try:
         from picamera2 import Picamera2
         cam = Picamera2()
-        cam.configure(cam.create_video_configuration(main={"size": (w, h), "format": "RGB888"}))
+        sensor = full_fov_sensor_mode(cam, w, h)
+        if sensor:
+            print(f"Sensor mode full-FOV: {sensor['output_size']}")
+        cam.configure(cam.create_video_configuration(main={"size": (w, h), "format": "RGB888"},
+                                                     sensor=sensor))
         cam.start()
         grab = cam.capture_array
         print(f"Dùng Pi Camera {w}x{h}")
